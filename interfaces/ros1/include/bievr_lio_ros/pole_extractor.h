@@ -119,6 +119,14 @@ struct PoleExtractionConfig {
   // line segments and projects observations continuously onto those segments;
   // the saved text format remains backward compatible.
   bool rail_enable = false;
+  // Installation prior in IMU/body coordinates (+Y follows that frame).
+  // Generic users opt in through YAML; absent keys preserve old map snapshots.
+  bool rail_mount_prior_enable = false;
+  double rail_mount_height = 4.135;
+  double rail_mount_center_y = 0.49;
+  double rail_mount_lateral_tolerance = 0.25;
+  double rail_mount_height_tolerance = 0.20;
+  double rail_mount_prior_weight = 0.15;
   double rail_station_resolution = 0.40;
   double rail_lateral_resolution = 0.05;
   double rail_lateral_min = -3.0;

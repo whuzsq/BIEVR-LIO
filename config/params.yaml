@@ -50,7 +50,7 @@ pole_extraction:
   input_voxel_resolution_m: 0.10
 
   # gnss_optimize 输出的 TUM 轨迹可在首次建图回放时填入这里，使支柱地图
-  # 位于 ENU/map 坐标系。第二次支柱重定位运行必须留空。
+  # 位于 ENU/map 坐标系。
   mapping_trajectory_path: ""
   mapping_trajectory_max_time_gap_s: 0.20
 
@@ -99,100 +99,34 @@ pole_extraction:
   output_directory: "/home/zsq/slam/bievr-slam/src/BIEVR-LIO/Log/poles"
   save_keyframe_clouds: True # 结束时将所有关键帧提取的支柱点汇总保存到 poles.pcd
 
-  # 二次运行时加载首次保存的支柱地图，优化 T_map_odom 的 x/y/yaw。
-  # 建图和稠密定位时保持 False；params_pole_localization.yaml 会覆盖开启。
-  localization_enable: False
-  localization_map_path: "/home/zsq/slam/bievr-slam/src/BIEVR-LIO/Log/poles/landmarks.txt"
-  localization_map_frame: "map"
-  localization_window_keyframes: 7
-  localization_match_distance_m: 4.0
-  # 回程可能位于邻近股道：在普通 ±10m ROI 外，保留预测先验柱轴附近的点。
-  # 仅定位时生效；柱体检测、最少匹配数和验收门限不变。
-  localization_guided_roi: True
-  localization_guided_roi_radius_m: 5.0
-  localization_guided_roi_max_range_m: 40.0
-  localization_radius_difference_m: 0.30
-  localization_axis_angle_deg: 5.0
-  localization_min_matches: 3 # 数学下限；同时要求 60% 匹配率和 10m 基线
-  localization_min_match_ratio: 0.60
-  localization_min_baseline_m: 10.0
-  localization_max_rms_m: 0.50
-  localization_huber_delta_m: 0.50
-  localization_max_translation_step_m: 5.0
-  localization_max_yaw_step_deg: 5.0
-  # 正常使用 /initialpose、GNSS 或已知起点提供初值。仅当两次 odom 确定
-  # 共原点时才启用下面的手工初值。
-  localization_use_initial_guess: False
-  localization_initial_translation: [0.0, 0.0, 0.0]
-  # 可选完整姿态 [qx,qy,qz,qw]；存在时优先于 yaw。坡道或中途启动时建议填写。
-  localization_initial_orientation_xyzw: []
-  localization_initial_yaw_deg: 0.0
-
-# 纯“LIO + 支柱地图”定位输出层；与稠密点云 localization 严格互斥。
-pole_localization:
-  enable: False
-  map_frame: "map"
-  output_directory: "/home/zsq/slam/bievr-slam/src/BIEVR-LIO/Log/pole_localization"
-
-  # 递推协方差层负责创新门控；通过门控的观测进入下方 GTSAM 因子图。
-  # 测量噪声根据匹配 RMS、匹配数量和空间基线自适应调整。
-  filter_enable: True
-  # GTSAM Pose3 因子图：每个支柱/轨道提取关键帧建立 X(k)，相邻节点由 LIO
-  # BetweenFactor 连接；支柱只约束 x/y/yaw，轨道只约束 z/roll/pitch。
-  factor_graph_enable: True
-  factor_graph_huber_delta: 2.5
-  factor_graph_prior_translation_sigma_m: 0.50
-  factor_graph_prior_rotation_sigma_deg: 2.0
-  process_noise_xy_m_per_sqrt_m: 0.05
-  process_noise_yaw_deg_per_sqrt_m: 0.03
-  process_noise_z_m_per_sqrt_m: 0.05
-  process_noise_tilt_deg_per_sqrt_m: 0.03
-  measurement_xy_floor_m: 0.08
-  measurement_yaw_floor_deg: 0.05
-  # 这里描述跨关键帧重复提取精度，不是单段曲线内部的厘米级拟合残差。
-  measurement_z_floor_m: 0.08
-  measurement_tilt_floor_deg: 0.10
-  mahalanobis_gate: 36.0
-  max_innovation_translation_m: 5.0
-  # Railway poles are periodic: the bag1--bag3 online replay produced a
-  # geometrically tight three-pole alias with a 1.229 deg yaw jump, while the
-  # preceding valid filtered updates stayed below 0.201 deg.
-  max_innovation_yaw_deg: 0.5
-  # 该数据中非刚性的 map<-odom 高程修正相邻关键帧可变化约 2~5m；候选进入
-  # 此处前已经通过轨距、切向、基线和竖直 RMS 检验，因此使用独立的宽门限。
-  max_innovation_z_m: 5.0
-  max_innovation_tilt_deg: 2.0
-  rail_mahalanobis_gate: 144.0
-  # 超过该里程没有通过轨道约束时，下一次高质量轨道拟合重新初始化
-  # z/roll/pitch，避免长无轨区后的累计高程差被小创新门限永久拒绝。
-  rail_rebootstrap_gap_m: 100.0
-
-  # 首次和丢失恢复都要求连续多个窗口确认；长距离没有新支柱时仅改变状态，
-  # 仍保留最后修正并由 LIO 连续推算，不向 LIO 前端反馈跳变。
-  initial_confirmations: 2
-  recovery_confirmations: 2
-  degraded_after_distance_m: 90.0
-  lost_after_distance_m: 240.0
-
-  publish_path: True
-  path_publish_frequency: 2.0
-  path_max_poses: 0
-  prelocalization_buffer_frames: 5000 # 离线快速回放时按确认时间戳回填轨迹
-
-# 与支柱共用同一批关键帧的左右钢轨矢量提取。建图时保存稀疏三维折线；
-# 支柱地图定位时加载该文件，只补充 z/roll/pitch，不加载稠密点云。
+# 与支柱共用同一批关键帧的左右钢轨矢量提取，保存轨道矢量和实测点云。
 rail_extraction:
   enable: True
+  # 由当前数据估计的安装先验，坐标原点/方向为去畸变点云的 IMU/body 坐标系。
+  # 中心 Y 为轨道中心相对传感器的位置（+Y 方向），不是传感器相对轨道的偏移。
+  # 轨顶高度估计 4.135m、中心 Y 估计 +0.49m；换车/安装位置后需重新标定。
+  mount_prior_enable: True
+  mount_height_m: 4.135
+  mount_center_y_m: 0.49
+  # 候选必须在预期钢轨位置附近，保留安装误差/悬挂运动的容差。
+  mount_lateral_tolerance_m: 0.25
+  mount_height_tolerance_m: 0.20
+  # 容差内仍按安装偏差评分；不把观测坐标硬改成先验坐标。
+  mount_prior_weight: 0.15
   # rails.pcd 保留原始分辨率的实测钢轨点；相对轨顶的筛选范围。
   cloud_half_width_m: 0.10
   cloud_depth_m: 0.18
   cloud_above_m: 0.05
   station_resolution_m: 0.40
   lateral_resolution_m: 0.05
-  lateral_min_m: -3.0
-  lateral_max_m: 3.0
-  relative_z_min_m: -5.30
-  relative_z_max_m: -3.40
+  # 粗 ROI 略宽于安装先验：0.49m 中心偏移 + 半轨距 + 0.25m 容差，
+  # 另保留约 0.15m 的横断面背景邻域，供轨顶显著性检测使用。
+  # 横向相对行驶切向定义，反向行驶会翻转左右，所以保留对称范围。
+  lateral_min_m: -1.80
+  lateral_max_m: 1.80
+  # 相对轨迹高度（负值为传感器下方）；包住 4.135m 高度先验及背景邻域。
+  relative_z_min_m: -4.55
+  relative_z_max_m: -3.75
   nominal_gauge_m: 1.435
   min_gauge_m: 1.20
   max_gauge_m: 1.80
@@ -204,22 +138,6 @@ rail_extraction:
   max_vertical_jump_m: 0.15
   max_cross_level_m: 0.20
   min_segment_samples: 12
-  map_path: "/home/zsq/slam/bievr-slam/src/BIEVR-LIO/Log/poles/rail_vector_map.txt"
-  match_distance_m: 2.0
-  max_tangent_angle_deg: 12.0
-  min_matches: 10
-  min_baseline_m: 8.0
-  huber_delta_m: 0.08
-  max_rms_m: 0.12
-  # 轨道平面约束只使用横轨方向和 yaw；沿轨平移始终不进入残差。
-  max_planar_rms_m: 0.30
-  max_cross_track_step_m: 1.0
-  max_yaw_step_deg: 2.0
-  max_z_step_m: 1.0
-  max_tilt_step_deg: 2.0
-  # 左右轨顶高差约束横滚，沿线坡度约束俯仰；均不引入沿轨方向平移约束。
-  update_roll: True
-  update_pitch: True
 
 loop_closure: # 位于里程计后端的 Scan Context + GTSAM 位姿图回环模块
   enable: False # 建图时设为 True；纯里程计或定位时设为 False
@@ -248,27 +166,6 @@ loop_closure: # 位于里程计后端的 Scan Context + GTSAM 位姿图回环模
 
   # 地图包包含点云、优化后位姿和 Scan Context 数据库
   bundle_path: "/home/zsq/slam/bievr-slam/src/BIEVR-LIO/Log/bievr_map_bundle"
-
-localization: # 位于里程计后端的先验地图定位模块
-  enable: False # 定位时设为 True，同时确保 loop_closure.enable 为 False
-
-  # 地图包支持自动重定位；单独的 PCD 地图需要通过 /initialpose 提供初始位姿
-  map_path: "/home/zsq/slam/bievr-slam/src/BIEVR-LIO/Log/bievr_map_bundle"
-
-  # 地图/扫描密度和驻留地图半径主要决定定位精度与内存占用
-  map_voxel_size_m: 0.3
-  scan_voxel_size_m: 0.5
-  crop_radius_m: 150.0
-  correction_frequency: 1.0 # 两次定位修正之间由 LIO 连续推算位姿
-
-  # 单次 small_gicp 的验收阈值和安全限制
-  icp_max_correspondence_distance: 1.0
-  fitness_threshold: 0.3 # 对应点欧氏距离平方的均值 [m²]
-  gicp_max_translation_step_m: 3.0
-  gicp_max_rotation_step_deg: 15.0
-
-  # 重定位描述子阈值；数值越小，候选匹配越严格
-  sc_dist_threshold: 0.2
 
 debug:
   publish_all_clouds: False # 是否发布所有点云（精细、粗略、去畸变）

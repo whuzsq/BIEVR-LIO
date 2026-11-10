@@ -1,6 +1,6 @@
 <launch>
   <!-- 建图节点 -->
-  <arg name="rviz" default="true"/>
+  <arg name="rviz" default="false"/>
 
   <include file="$(find bievr_lio_ros)/launch/gnss_recorder.launch">
     <arg name="params" value="$(find bievr_lio_ros)/../../config/params.yaml"/>

@@ -180,6 +180,12 @@ install(PROGRAMS
 )
 
 if(CATKIN_ENABLE_TESTING)
+  add_executable(rail_mount_prior_test tests/rail_mount_prior_test.cpp)
+  target_link_libraries(rail_mount_prior_test bievr_pole_extractor ${catkin_LIBRARIES})
+  if(UNIX AND NOT APPLE)
+    target_link_options(rail_mount_prior_test PRIVATE "-Wl,--disable-new-dtags")
+  endif()
+  add_test(NAME rail_mount_prior COMMAND rail_mount_prior_test)
   add_executable(scan_archive_test tests/scan_archive_test.cpp)
   target_link_libraries(scan_archive_test bievr_lio::bievr_lio)
   add_test(NAME scan_archive_roundtrip COMMAND scan_archive_test)

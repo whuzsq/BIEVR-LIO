@@ -448,21 +448,30 @@ bool writeOutputs(
   }
   const fs::path directory(options.output_directory);
   std::ofstream tum(directory / "gnss_optimized_tum.txt");
+  std::ofstream obj(directory / "trajectory.obj");
   std::ofstream aligned(directory / "lio_aligned_enu_tum.txt");
   std::ofstream summary(directory / "summary.yaml");
   std::ofstream seed(directory / "initial_correction.yaml");
-  if (!tum || !aligned || !summary || !seed) {
+  if (!tum || !obj || !aligned || !summary || !seed) {
     message = "Cannot open one or more GNSS optimization output files.";
     return false;
   }
+  obj << std::setprecision(15);
   tum << std::fixed << std::setprecision(9);
   for (const auto& stamped : optimized) {
     const bievr::V3& p = stamped.pose.translation();
+    obj << "v " << p.x() << " " << p.y() << " " << p.z() << "\n";
     const bievr::Quaternion q(stamped.pose.rotation());
     tum << static_cast<double>(stamped.stamp) * 1.0e-9 << " " << p.x() << " " << p.y()
         << " " << p.z() << " " << q.x() << " " << q.y() << " " << q.z() << " "
         << q.w() << "\n";
   }
+  if (optimized.size() >= 2) {
+    obj << "l";
+    for (size_t i = 0; i < optimized.size(); ++i) obj << " " << i + 1;
+    obj << "\n";
+  }
+  obj.close();
   aligned << std::fixed << std::setprecision(9);
   for (const auto& stamped : raw) {
     const bievr::Transform pose(stats.initial_T_enu_odom * stamped.pose);
@@ -543,7 +552,7 @@ bool writeOutputs(
           << correction_orientation.y() << ", " << correction_orientation.z() << ", "
           << correction_orientation.w() << "]\n"
           << "seed_yaw_deg: " << yaw_deg << "\n";
-  if (!tum || !aligned || !summary || !seed) {
+  if (!tum || !obj || !aligned || !summary || !seed) {
     message = "Failed while writing GNSS optimization outputs.";
     return false;
   }

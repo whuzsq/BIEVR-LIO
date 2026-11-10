@@ -160,6 +160,7 @@ RViz；不需要时可使用 `roslaunch bievr_lio_ros mapping.launch rviz:=false
 | File | Description |
 |------|-------------|
 | `Log/map.pcd` | 体素降采样后的累计点云地图，包含 `x y z intensity`；每个体素保留首个点及其强度 |
+| `Log/gnss_optimization/trajectory.obj` | GNSS 优化后的 ENU 轨迹，格式同 `Log/trajectory.obj` |
 | `Log/trajectory.obj` | OBJ 折线轨迹，可由 MeshLab、Blender 等软件打开 |
 | `Log/odometry_tum.txt` | TUM 格式里程计，字段为 `timestamp tx ty tz qx qy qz qw` |
 | `Log/localization_tum.txt` | Localization 模式输出的地图坐标系定位轨迹；只有成功定位后才生成 |
@@ -175,6 +176,9 @@ RViz；不需要时可使用 `roslaunch bievr_lio_ros mapping.launch rviz:=false
 | `Log/pole_localization/localization_tum.txt` | 不使用稠密地图时，由支柱修正与每帧 LIO 组合得到的完整轨迹 |
 | `Log/pole_localization/filtered_corrections.txt` | 纯支柱定位每次滤波更新的原始/滤波修正、创新、马氏距离和协方差 |
 | `Log/pole_localization/summary.yaml` | 稀疏地图定位状态、支柱/轨道接受数、轨迹帧数和末次创新 |
+
+重定位运行仅保存定位模块的修正轨迹与统计，不再额外生成原始 LIO 的
+`trajectory.obj` 和 `odometry_tum.txt`；这两个文件仍在建图时生成。
 
 当前 `config/params.yaml` 给出了项目目录下的绝对路径默认值；使用覆盖参数时，
 输出目录由最后一层 YAML 决定：
@@ -410,6 +414,17 @@ roslaunch bievr_lio_ros process_bag.launch sensor_config:=xiangyang \
   params:=params params_overlay:=params_pole_rail_localization \
   rosbag:="/absolute/path/to/bag.bag" rviz:=true
 ```
+
+轨道提取还支持传感器安装位置先验：`rail_extraction.mount_prior_enable` 开启后，
+由 `mount_height_m`、`mount_center_y_m` 和标准轨距预测本车左右钢轨的位置。
+高度是轨顶相对 IMU/body 原点的向下距离，中心 Y 是轨道中心相对该原点的 Y 坐标；
+当前襄阳配置的点云/IMU 外参为单位变换，估计值分别为 4.135 m 和 +0.49 m。
+预测随插值的 body 姿态转换到轨迹横断面，支持反向行驶；候选须通过横向/高度
+容差门限，并在显著性、轨距和连续性评分之外加入安装偏差惩罚。
+这只约束候选选择，输出仍来自实测轨顶；超出容差时不生成替代轨道。
+默认横向容差 0.25 m、高度容差 0.20 m，换安装位置或外参后须重新估计。
+建图和定位共享 `params.yaml` 中这组提取参数；旧地图快照未记录这些键时仍使用
+原算法，GNSS 重建可用 `--pole_params_file config/params.yaml` 显式采用新配置。
 
 轨道观测和地图分别发布到 `/bievr_lio/rails/observed` 与
 `/bievr_lio/rails/map`。本数据的同源验证中，垂直 RMSE 从纯支柱的 `0.960 m`

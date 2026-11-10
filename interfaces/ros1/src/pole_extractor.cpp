@@ -364,6 +364,7 @@ struct RailCellStat {
 };
 
 struct RailProjection {
+  Rotation body_rotation = Rotation::Identity();
   V3 position = V3::Zero();
   V3 tangent = V3::UnitX();
   double station = 0.0;
@@ -406,6 +407,7 @@ RailProjection railTrajectoryAtStation(
   RailProjection result;
   if (frames.empty()) return result;
   result.position = frames.front()->pose.translation();
+  result.body_rotation = frames.front()->pose.rotation();
   if (frames.size() < 2) return result;
   station = std::clamp(station, 0.0, cumulative.back());
   for (size_t i = 0; i + 1 < frames.size(); ++i) {
@@ -416,6 +418,8 @@ RailProjection railTrajectoryAtStation(
     const V3 delta = frames[i + 1]->pose.translation() - start;
     const double ratio = std::clamp((station - cumulative[i]) / length, 0.0, 1.0);
     result.position = start + ratio * delta;
+    result.body_rotation = Quaternion(frames[i]->pose.rotation()).slerp(
+        ratio, Quaternion(frames[i + 1]->pose.rotation())).normalized().toRotationMatrix();
     result.tangent = delta.normalized();
     result.station = station;
     return result;
@@ -452,6 +456,11 @@ std::vector<RailSample> extractRailVector(
     const RailProjection projection =
         projectToRailTrajectory(world, task.frames, cumulative);
     const Eigen::Vector2d tangent = projection.tangent.head<2>().normalized();
+    // Endpoint-clamped projections must not collapse distant points outside
+    // this keyframe's trajectory into its first/last cross section.
+    const double along_offset =
+        (world.head<2>() - projection.position.head<2>()).dot(tangent);
+    if (std::abs(along_offset) > 0.5 * config.rail_station_resolution) continue;
     const Eigen::Vector2d left(-tangent.y(), tangent.x());
     const double lateral = (world.head<2>() - projection.position.head<2>()).dot(left);
     const double relative_z = world.z() - projection.position.z();
@@ -482,6 +491,31 @@ std::vector<RailSample> extractRailVector(
   double previous_right_z = 0.0;
   int missing = 0;
   for (int station_bin = 0; station_bin <= station_count; ++station_bin) {
+    const double station =
+        (static_cast<double>(station_bin) + 0.5) * config.rail_station_resolution;
+    const RailProjection projection =
+        railTrajectoryAtStation(station, task.frames, cumulative);
+    Eigen::Vector2d tangent_xy = projection.tangent.head<2>();
+    if (tangent_xy.norm() < 1.0e-6) continue;
+    tangent_xy.normalize();
+    const V3 left_axis(-tangent_xy.y(), tangent_xy.x(), 0.0);
+    struct ExpectedRail { double lateral; double z; };
+    std::array<ExpectedRail, 2> expected{};
+    if (config.rail_mount_prior_enable) {
+      for (size_t side = 0; side < 2; ++side) {
+        const double y = config.rail_mount_center_y +
+            (side == 0 ? -0.5 : 0.5) * config.rail_nominal_gauge;
+        const V3 offset = projection.body_rotation * V3(0.0, y, -config.rail_mount_height);
+        expected[side] = {offset.dot(left_axis), offset.z()};
+      }
+      // Traversal may oppose the body X axis. Sort in the extraction frame
+      // rather than treating body left/right as travel left/right.
+      if (expected[0].lateral > expected[1].lateral) std::swap(expected[0], expected[1]);
+    }
+    auto inside_mount_prior = [&](double lateral, double z, const ExpectedRail& prior) {
+      return std::abs(lateral - prior.lateral) <= config.rail_mount_lateral_tolerance &&
+             std::abs(z - prior.z) <= config.rail_mount_height_tolerance;
+    };
     std::vector<Candidate> candidates;
     for (int lateral_bin = lateral_min_bin + 3;
          lateral_bin <= lateral_max_bin - 3; ++lateral_bin) {
@@ -506,10 +540,12 @@ std::vector<RailSample> extractRailVector(
       const double prominence = found->second.top_z - background;
       if (prominence < config.rail_min_prominence ||
           found->second.top_z + 0.01 < neighbour_max) continue;
-      candidates.push_back({lateral_bin,
-                            (static_cast<double>(lateral_bin) + 0.5) *
-                                config.rail_lateral_resolution,
-                            found->second.top_z, prominence});
+      const double lateral =
+          (static_cast<double>(lateral_bin) + 0.5) * config.rail_lateral_resolution;
+      if (config.rail_mount_prior_enable &&
+          !inside_mount_prior(lateral, found->second.top_z, expected[0]) &&
+          !inside_mount_prior(lateral, found->second.top_z, expected[1])) continue;
+      candidates.push_back({lateral_bin, lateral, found->second.top_z, prominence});
     }
 
     const Candidate* best_left = nullptr;
@@ -521,6 +557,20 @@ std::vector<RailSample> extractRailVector(
         if (gauge < config.rail_min_gauge || gauge > config.rail_max_gauge) continue;
         double cost = 2.0 * std::abs(gauge - config.rail_nominal_gauge) -
                       left.prominence - right.prominence;
+        if (config.rail_mount_prior_enable) {
+          if (!inside_mount_prior(left.lateral, left.top_z, expected[0]) ||
+              !inside_mount_prior(right.lateral, right.top_z, expected[1])) continue;
+          const double left_y = (left.lateral - expected[0].lateral) /
+                                config.rail_mount_lateral_tolerance;
+          const double right_y = (right.lateral - expected[1].lateral) /
+                                 config.rail_mount_lateral_tolerance;
+          const double left_z = (left.top_z - expected[0].z) /
+                                config.rail_mount_height_tolerance;
+          const double right_z = (right.top_z - expected[1].z) /
+                                 config.rail_mount_height_tolerance;
+          cost += config.rail_mount_prior_weight *
+                  (left_y * left_y + right_y * right_y + left_z * left_z + right_z * right_z);
+        }
         if (have_previous) {
           const double left_jump = std::abs(left.lateral - previous_left);
           const double right_jump = std::abs(right.lateral - previous_right);
@@ -552,14 +602,6 @@ std::vector<RailSample> extractRailVector(
     previous_left_z = best_left->top_z;
     previous_right_z = best_right->top_z;
 
-    const double station =
-        (static_cast<double>(station_bin) + 0.5) * config.rail_station_resolution;
-    const RailProjection projection =
-        railTrajectoryAtStation(station, task.frames, cumulative);
-    Eigen::Vector2d tangent_xy = projection.tangent.head<2>();
-    if (tangent_xy.norm() < 1.0e-6) continue;
-    tangent_xy.normalize();
-    const V3 left_axis(-tangent_xy.y(), tangent_xy.x(), 0.0);
     RailSample sample;
     sample.segment = task.index;
     sample.index = output.size();
@@ -1839,6 +1881,18 @@ bool loadPoleExtractionConfig(const std::vector<std::string>& yaml_paths,
 
   config.rail_enable = yaml.get<bool>("rail_extraction", "enable", config.rail_enable);
   if (config.rail_enable) {
+    config.rail_mount_prior_enable = yaml.get<bool>(
+        "rail_extraction", "mount_prior_enable", config.rail_mount_prior_enable);
+    config.rail_mount_height = yaml.get<double>(
+        "rail_extraction", "mount_height_m", config.rail_mount_height);
+    config.rail_mount_center_y = yaml.get<double>(
+        "rail_extraction", "mount_center_y_m", config.rail_mount_center_y);
+    config.rail_mount_lateral_tolerance = yaml.get<double>(
+        "rail_extraction", "mount_lateral_tolerance_m", config.rail_mount_lateral_tolerance);
+    config.rail_mount_height_tolerance = yaml.get<double>(
+        "rail_extraction", "mount_height_tolerance_m", config.rail_mount_height_tolerance);
+    config.rail_mount_prior_weight = yaml.get<double>(
+        "rail_extraction", "mount_prior_weight", config.rail_mount_prior_weight);
     config.rail_station_resolution = yaml.get<double>(
         "rail_extraction", "station_resolution_m", config.rail_station_resolution);
     config.rail_lateral_resolution = yaml.get<double>(
@@ -1906,6 +1960,15 @@ bool loadPoleExtractionConfig(const std::vector<std::string>& yaml_paths,
         "rail_extraction", "update_roll", config.rail_update_roll);
     config.rail_update_pitch = yaml.get<bool>(
         "rail_extraction", "update_pitch", config.rail_update_pitch);
+    if (config.rail_mount_prior_enable &&
+        (!std::isfinite(config.rail_mount_height) || config.rail_mount_height <= 0.0 ||
+         !std::isfinite(config.rail_mount_center_y) ||
+         !std::isfinite(config.rail_mount_lateral_tolerance) || config.rail_mount_lateral_tolerance <= 0.0 ||
+         !std::isfinite(config.rail_mount_height_tolerance) || config.rail_mount_height_tolerance <= 0.0 ||
+         !std::isfinite(config.rail_mount_prior_weight) || config.rail_mount_prior_weight <= 0.0)) {
+      LOG(E, "Config error: invalid rail mounting prior.");
+      return false;
+    }
     if (!std::isfinite(config.rail_cloud_half_width) || config.rail_cloud_half_width <= 0.0 ||
         !std::isfinite(config.rail_cloud_depth) || config.rail_cloud_depth <= 0.0 ||
         !std::isfinite(config.rail_cloud_above) || config.rail_cloud_above <= 0.0 ||
@@ -1990,6 +2053,12 @@ bool loadPoleExtractionConfig(const std::vector<std::string>& yaml_paths,
       LOG(I, "Rail-vector extraction enabled: station resolution "
                  << config.rail_station_resolution << " m, gauge "
                  << config.rail_min_gauge << ".." << config.rail_max_gauge << " m.");
+      if (config.rail_mount_prior_enable) {
+        LOG(I, "Rail mounting prior: body center Y " << config.rail_mount_center_y
+                   << " m, height " << config.rail_mount_height << " m, lateral/height tolerances "
+                   << config.rail_mount_lateral_tolerance << "/"
+                   << config.rail_mount_height_tolerance << " m.");
+      }
     }
   }
   return true;

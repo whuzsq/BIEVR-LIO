@@ -1,3 +1,7 @@
+# 重定位不记录建图用的 GNSS/点云归档，保留 Log/gnss/scans.bin。
+gnss_recorder:
+  enable: False
+
 map:
   pixel_size_m: 0.05 # 像素边长 [m]
   voxel_size_m: 0.5 # 体素边长 [m]
@@ -26,7 +30,7 @@ path:
 map_save: # 此处保存纯里程计地图，不是回环优化地图；回环地图由 bundle_path 保存
   accumulate: False # 是否累计配准后的扫描，供 save_map 服务保存
   resolution_m: 0.1 # 纯里程计累计点云的体素分辨率 [m]
-  path: "/home/zsq/slam/bievr-slam/src/BIEVR-LIO/Log/map.pcd" # 纯里程计地图的保存路径
+  path: "/home/zsq/slam/bievr-slam/src/BIEVR-LIO/Log/localization/map.pcd" # 定位运行的轨迹输出到此文件所在目录
 
 # 本文件作为 params.yaml 的稠密点云重定位覆盖层使用。该模式只运行
 # Localizer/GICP，不提取支柱，也不读取 landmarks.txt。

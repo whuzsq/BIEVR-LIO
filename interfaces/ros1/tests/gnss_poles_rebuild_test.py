@@ -84,6 +84,13 @@ class RebuildTest(unittest.TestCase):
                 return result.stdout
 
             run()
+            trajectory = np.loadtxt(root / 'optimized/gnss_optimized_tum.txt')
+            obj_lines = (root / 'optimized/trajectory.obj').read_text().splitlines()
+            vertices = np.array([[float(v) for v in line.split()[1:]]
+                                 for line in obj_lines if line.startswith('v ')])
+            np.testing.assert_allclose(vertices, trajectory[:, 1:4], atol=1e-8)
+            self.assertEqual(obj_lines[-1].split(),
+                             ['l'] + [str(i + 1) for i in range(len(trajectory))])
             backups = list(root.glob('poles.before_gnss_*'))
             self.assertEqual(len(backups), 1)
             self.assertEqual((backups[0] / 'landmarks.txt').read_text(), 'original pole results\n')

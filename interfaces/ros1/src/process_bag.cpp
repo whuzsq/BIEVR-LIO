@@ -237,7 +237,9 @@ int main(int argc, char** argv) {
                                       << " vertical corrections accepted.");
     }
   }
-  if (!pipeline->saveResults()) {
+  // Relocalization saves its corrected trajectory through the localizer below.
+  // Raw LIO trajectory/map outputs are only needed for mapping runs.
+  if (!dense_localization_mode && !pole_localization_mode && !pipeline->saveResults()) {
     LOG(E, "One or more final outputs could not be saved.");
     exit_code = -1;
   }
